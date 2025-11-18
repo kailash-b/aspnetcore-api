@@ -1,0 +1,69 @@
+name: Create NuGet and GitHub Release
+
+on:
+  pull_request:
+    types:
+      - closed
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  pack:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'release/'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      
+      - name: Get version
+        id: get_version
+        uses: ./.github/actions/get-version
+      
+      - name: Create NuGet package
+        run: |
+          dotnet pack src/Auth0.AspNetCore.Authentication.Api/Auth0.AspNetCore.Authentication.Api.csproj \
+            --configuration Release \
+            --output ${{ github.workspace }}/nuget \
+            /p:Version=${{ steps.get_version.outputs.version }}
+      
+      - name: Upload NuGet package as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package
+          path: ${{ github.workspace }}/nuget/*.nupkg
+          retention-days: 1
+
+  rl-scanner:
+    needs: pack
+    uses: ./.github/workflows/rl-secure.yml
+    with:
+      artifact-name: "aspnetcore-api.tgz"
+    secrets:
+      RLSECURE_LICENSE: ${{ secrets.RLSECURE_LICENSE }}
+      RLSECURE_SITE_KEY: ${{ secrets.RLSECURE_SITE_KEY }}
+      SIGNAL_HANDLER_TOKEN: ${{ secrets.SIGNAL_HANDLER_TOKEN }}
+      PRODSEC_TOOLS_USER: ${{ secrets.PRODSEC_TOOLS_USER }}
+      PRODSEC_TOOLS_TOKEN: ${{ secrets.PRODSEC_TOOLS_TOKEN }}
+      PRODSEC_TOOLS_ARN: ${{ secrets.PRODSEC_TOOLS_ARN }}
+
+
+  release:
+    needs: rl-scanner
+    uses: ./.github/workflows/nuget-release.yml    
+    with:
+      nuget-directory: nuget
+    secrets:
+      nuget-token: ${{ secrets.NUGET_APIKEY }}
+      github-token: ${{ secrets.GITHUB_TOKEN }}
